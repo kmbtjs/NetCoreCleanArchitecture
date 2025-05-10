@@ -1,9 +1,0 @@
-@App.API_HostAddress = https://localhost:7048
-
-GET {{App.API_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###
-
-###Send request to Products API to get all products
-GET {{App.API_HostAddress}}/api/products
