@@ -9,128 +9,137 @@ using App.Domain.Entities;
 using App.Domain.Events;
 using AutoMapper;
 using System.Net;
+using System.Text.Json;
 
-namespace App.Application.Features.Products;
-
-    public class ProductService(IProductRepository productRepository, IUnitOfWork unitOfWork, IMapper mapper, ICacheService cacheService, IServiceBus serviceBus) : IProductService
-    {
-        private const string ProductListCacheKey = "ProductList";
-
-        public async Task<ServiceResult<List<ProductDto>>> GetAllProductsAsync()
+namespace App.Application.Features.Products
+{
+        public class ProductService(IProductRepository productRepository, IUnitOfWork unitOfWork, IMapper mapper, ICacheService cacheService, IServiceBus serviceBus) : IProductService
         {
-            var cachedProductList = await cacheService.GetAsync<List<ProductDto>>(ProductListCacheKey);
+            private const string ProductListCacheKey = "ProductList";
+            private const string ProductListRedisCacheKey = "product:list";
 
-            if (cachedProductList is not null) return ServiceResult<List<ProductDto>>.Success(cachedProductList);
-
-            var products = await productRepository.GetAllAsync();
-            var productsAsDto = mapper.Map<List<ProductDto>>(products);
-
-            await cacheService.AddAsync(ProductListCacheKey, productsAsDto, TimeSpan.FromMinutes(5));
-
-            return ServiceResult<List<ProductDto>>.Success(productsAsDto);
-        }
-
-        public async Task<ServiceResult<List<ProductDto>>> GetPaginatedAllProductsAsync(int pageNum, int pageSize)
-        {
-            var products = await productRepository.GetAllPagedAsync(pageNum, pageSize);
-            var productsAsDto = mapper.Map<List<ProductDto>>(products);
-            
-            return ServiceResult<List<ProductDto>>.Success(productsAsDto);
-        }
-
-        public async Task<ServiceResult<List<ProductDto>>> GetTopPricedAsync(int count)
-        {
-            var products = await productRepository.GetTopPricedProductsAsync(count);
-
-            var productsAsDto = mapper.Map<List<ProductDto>>(products);
-
-            return new ServiceResult<List<ProductDto>>()
+            public async Task<ServiceResult<List<ProductDto>>> GetAllProductsAsync()
             {
-                Data = productsAsDto
-            };
-        }
+                //var cachedProductList = await cacheService.GetAsync<List<ProductDto>>(ProductListCacheKey);
 
-        public async Task<ServiceResult<ProductDto?>> GetByIdAsync(int id)
-        {
-            var product = await productRepository.GetByIdAsync(id);
+                var jsonProductList = await cacheService.GetAsync(ProductListRedisCacheKey);
 
-            if (product is null)
-            {
-                return ServiceResult<ProductDto?>.Failure($"Product with id {id} not found", HttpStatusCode.NotFound);
+                var cachedProductList = jsonProductList is not null
+                    ? JsonSerializer.Deserialize<List<ProductDto>>(jsonProductList)
+                    : null;
+
+                if (cachedProductList is not null) return ServiceResult<List<ProductDto>>.Success(cachedProductList);
+
+                var products = await productRepository.GetAllAsync();
+                var productsAsDto = mapper.Map<List<ProductDto>>(products);
+                var jsonProduct = JsonSerializer.Serialize(productsAsDto);
+                await cacheService.AddAsync(ProductListRedisCacheKey, jsonProduct);
+
+                return ServiceResult<List<ProductDto>>.Success(productsAsDto);
             }
 
-            var productAsDto = mapper.Map<ProductDto>(product);
-
-            return ServiceResult<ProductDto?>.Success(productAsDto!);
-        }
-
-        public async Task<ServiceResult<CreateProductResponse>> CreateAsync(CreateProductRequest request)
-        {
-            var anyExistingProduct = await productRepository
-                .AnyAsync(p => p.Name == request.Name);
-
-            if (anyExistingProduct)
+            public async Task<ServiceResult<List<ProductDto>>> GetPaginatedAllProductsAsync(int pageNum, int pageSize)
             {
+                var products = await productRepository.GetAllPagedAsync(pageNum, pageSize);
+                var productsAsDto = mapper.Map<List<ProductDto>>(products);
+            
+                return ServiceResult<List<ProductDto>>.Success(productsAsDto);
+            }
+
+            public async Task<ServiceResult<List<ProductDto>>> GetTopPricedAsync(int count)
+            {
+                var products = await productRepository.GetTopPricedProductsAsync(count);
+
+                var productsAsDto = mapper.Map<List<ProductDto>>(products);
+
+                return new ServiceResult<List<ProductDto>>()
+                {
+                    Data = productsAsDto
+                };
+            }
+
+            public async Task<ServiceResult<ProductDto?>> GetByIdAsync(int id)
+            {
+                var product = await productRepository.GetByIdAsync(id);
+
+                if (product is null)
+                {
+                    return ServiceResult<ProductDto?>.Failure($"Product with id {id} not found", HttpStatusCode.NotFound);
+                }
+
+                var productAsDto = mapper.Map<ProductDto>(product);
+
+                return ServiceResult<ProductDto?>.Success(productAsDto!);
+            }
+
+            public async Task<ServiceResult<CreateProductResponse>> CreateAsync(CreateProductRequest request)
+            {
+                var anyExistingProduct = await productRepository
+                    .AnyAsync(p => p.Name == request.Name);
+
+                if (anyExistingProduct)
+                {
+                    return ServiceResult<CreateProductResponse>
+                        .Failure($"Product with name {request.Name} already exists", HttpStatusCode.Conflict);
+                }
+
+                var product=mapper.Map<Product>(request);
+
+                await productRepository.AddAsync(product);
+                await unitOfWork.SaveChangesAsync();
+            
+                await serviceBus.PublishAsync(new ProductAddedEvent(product.Id, product.Name, product.Price));
+                await cacheService.RemoveAsync(ProductListRedisCacheKey);
+
                 return ServiceResult<CreateProductResponse>
-                    .Failure($"Product with name {request.Name} already exists", HttpStatusCode.Conflict);
+                    .SuccessAsCreated(new CreateProductResponse(product.Id), $"api/products/{product.Id}");
             }
 
-            var product=mapper.Map<Product>(request);
-
-            await productRepository.AddAsync(product);
-            await unitOfWork.SaveChangesAsync();
-            
-            await serviceBus.PublishAsync(new ProductAddedEvent(product.Id, product.Name, product.Price));
-            await cacheService.RemoveAsync(ProductListCacheKey);
-
-            return ServiceResult<CreateProductResponse>
-                .SuccessAsCreated(new CreateProductResponse(product.Id), $"api/products/{product.Id}");
-        }
-
-        public async Task<ServiceResult> UpdateAsync(int id, UpdateProductRequest request)
-        {
-            var anyExistingProduct = await productRepository
-                .AnyAsync(p => p.Name == request.Name && !p.Id.Equals(id));
-
-            if (anyExistingProduct)
+            public async Task<ServiceResult> UpdateAsync(int id, UpdateProductRequest request)
             {
-                return ServiceResult.Failure($"Product with name {request.Name} already exists", HttpStatusCode.Conflict);
+                var anyExistingProduct = await productRepository
+                    .AnyAsync(p => p.Name == request.Name && !p.Id.Equals(id));
+
+                if (anyExistingProduct)
+                {
+                    return ServiceResult.Failure($"Product with name {request.Name} already exists", HttpStatusCode.Conflict);
+                }
+
+                var product = mapper.Map<Product>(request);
+                product.Id = id;
+                productRepository.Update(product);
+
+                await unitOfWork.SaveChangesAsync();
+                await cacheService.RemoveAsync(ProductListRedisCacheKey);
+
+                return ServiceResult.Success(HttpStatusCode.NoContent);
             }
 
-            var product = mapper.Map<Product>(request);
-            product.Id = id;
-            productRepository.Update(product);
-
-            await unitOfWork.SaveChangesAsync();
-            await cacheService.RemoveAsync(ProductListCacheKey);
-
-            return ServiceResult.Success(HttpStatusCode.NoContent);
-        }
-
-        public async Task<ServiceResult> UpdateStockAsync(UpdateProductStockRequest request)
-        {
-            var product = await productRepository.GetByIdAsync(request.ProductId);
-            if (product is null)
+            public async Task<ServiceResult> UpdateStockAsync(UpdateProductStockRequest request)
             {
-                return ServiceResult.Failure($"Product with id {request.ProductId} not found", HttpStatusCode.NotFound);
+                var product = await productRepository.GetByIdAsync(request.ProductId);
+                if (product is null)
+                {
+                    return ServiceResult.Failure($"Product with id {request.ProductId} not found", HttpStatusCode.NotFound);
+                }
+
+                product.Stock = request.Quantity;
+                productRepository.Update(product);
+                await unitOfWork.SaveChangesAsync();
+                await cacheService.RemoveAsync(ProductListRedisCacheKey);
+
+                return ServiceResult.Success(HttpStatusCode.NoContent);
             }
 
-            product.Stock = request.Quantity;
-            productRepository.Update(product);
-            await unitOfWork.SaveChangesAsync();
-            await cacheService.RemoveAsync(ProductListCacheKey);
+            public async Task<ServiceResult> DeleteAsync(int id)
+            {
+                var product = await productRepository.GetByIdAsync(id);
 
-            return ServiceResult.Success(HttpStatusCode.NoContent);
+                productRepository.Delete(product!);
+                await unitOfWork.SaveChangesAsync();
+                await cacheService.RemoveAsync(ProductListRedisCacheKey);
+
+                return ServiceResult.Success(HttpStatusCode.NoContent);
+            }
         }
-
-        public async Task<ServiceResult> DeleteAsync(int id)
-        {
-            var product = await productRepository.GetByIdAsync(id);
-
-            productRepository.Delete(product!);
-            await unitOfWork.SaveChangesAsync();
-            await cacheService.RemoveAsync(ProductListCacheKey);
-
-            return ServiceResult.Success(HttpStatusCode.NoContent);
-        }
-    }
+}

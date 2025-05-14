@@ -1,5 +1,7 @@
 ﻿using App.Application.Contracts.Caching;
 using App.Caching;
+using Microsoft.Extensions.Configuration;
+using StackExchange.Redis;
 
 namespace App.WebAPI.Extensions
 {
@@ -9,9 +11,12 @@ namespace App.WebAPI.Extensions
         {
             services.AddMemoryCache();
             services.AddSingleton<ICacheService, CacheService>();
+            
+            services.AddStackExchangeRedisCache(options =>
+            {
+                options.Configuration = "localhost:6379";
+            });
 
-            //services.AddDistributedMemoryCache();
-            //services.AddResponseCaching();
             return services;
         }
     }
