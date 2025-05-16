@@ -4,5 +4,6 @@
     {
         public const string Key = "ConnectionStrings";
         public string SqlServer { get; set; } = default!;
+        public string Redis { get; set; } = default!;
     }
 }

@@ -15,5 +15,7 @@
         Task RemoveAsync(string key);
 
         void Remove(string key);
+
+        void FlushAll();
     }
 }
