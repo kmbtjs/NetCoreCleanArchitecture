@@ -4,16 +4,17 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace App.Caching
 {
-    public class CacheService(IMemoryCache memoryCache, IDistributedCache distributedCache) : ICacheService
+    public class CacheService(IMemoryCache memoryCache, IDistributedCache distributedCache, IRedisCacheService redisCache) : ICacheService
     {
         public Task<T?> GetAsync<T>(string key)
         {
-            return memoryCache.TryGetValue(key, out T value) ? Task.FromResult(value) : Task.FromResult(default(T));
+            return memoryCache.TryGetValue(key, out T? value) ? Task.FromResult(value) : Task.FromResult(default(T));
         }
 
         public Task<string?> GetAsync(string key)
         {
-            return distributedCache.GetStringAsync(key);
+            //return distributedCache.GetStringAsync(key);
+            return redisCache.GetAsync(key);
         }
 
         public Task<byte[]?> GetByteAsync(string key)
@@ -35,10 +36,12 @@ namespace App.Caching
 
         public async Task AddAsync(string key, string value, TimeSpan? expirationTime = null)
         {
-            await distributedCache.SetStringAsync(key, value, new DistributedCacheEntryOptions
-            {
-                AbsoluteExpirationRelativeToNow = expirationTime
-            });
+            //await distributedCache.SetStringAsync(key, value, new DistributedCacheEntryOptions
+            //{
+            //    AbsoluteExpirationRelativeToNow = expirationTime
+            //});
+
+            await redisCache.SetStringAsync(key, value, expirationTime);
         }
 
         public void Remove(string key)
@@ -49,6 +52,11 @@ namespace App.Caching
         public Task RemoveAsync(string key)
         {
             return distributedCache.RemoveAsync(key);
+        }
+
+        public void FlushAll()
+        {
+            redisCache.FlushAll();
         }
     }
 }

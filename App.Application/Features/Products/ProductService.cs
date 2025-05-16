@@ -89,7 +89,7 @@ namespace App.Application.Features.Products
                 await unitOfWork.SaveChangesAsync();
             
                 await serviceBus.PublishAsync(new ProductAddedEvent(product.Id, product.Name, product.Price));
-                await cacheService.RemoveAsync(ProductListRedisCacheKey);
+                cacheService.FlushAll();
 
                 return ServiceResult<CreateProductResponse>
                     .SuccessAsCreated(new CreateProductResponse(product.Id), $"api/products/{product.Id}");
